@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-09-25
+
+### Added
+
+- **Hourly forecast** option on the Weather widget: the new
+  `forecast_type` setting ("daily" / "hourly", default "daily")
+  switches the forecast strip from per-day columns (weekday +
+  hi/lo) to per-hour columns (time + single temperature +
+  precipitation). Hourly time labels follow the configured
+  12/24-hour clock setting.
+
+### Changed
+
+- **`forecast_days` renamed to `forecast_count`** on the Weather
+  widget: the single count now drives both daily and hourly
+  forecasts (0–48). The old `forecast_days` key is still honoured
+  as a deprecated alias so existing layouts keep working.
+- Hourly forecasts are stored in a separate
+  `forecast_hourly` attribute, so daily and hourly widgets can
+  share the same weather entity without overwriting each other.
+
 ## [0.7.0] - 2026-08-08
 
 ### Added
@@ -288,6 +309,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release.
 
+[0.7.1]: https://github.com/cryptomilk/hass-eink-dashboard/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/cryptomilk/hass-eink-dashboard/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/cryptomilk/hass-eink-dashboard/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/cryptomilk/hass-eink-dashboard/compare/v0.4.1...v0.5.0
