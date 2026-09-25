@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import logging
 import math
 from typing import Any, cast
@@ -1383,6 +1384,13 @@ def _extract_attribute_points(
     state = states_dict.get(eid, {})
     attrs = state.get("attributes", {}) if isinstance(state, dict) else {}
     raw_list = attrs.get(attribute, []) if isinstance(attrs, dict) else []
+    if isinstance(raw_list, str):
+        # JSON-encoded list attribute; a non-JSON string is treated
+        # as a non-list value so no graph is rendered.
+        try:
+            raw_list = json.loads(raw_list)
+        except ValueError:
+            raw_list = []
 
     numeric: list[tuple[float, float]] = []
     if isinstance(raw_list, list):
