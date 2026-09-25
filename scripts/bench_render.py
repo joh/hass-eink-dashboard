@@ -267,7 +267,7 @@ _MOCK_DATA: dict[str, tuple[dict, dict]] = {
             "entity": "weather.home",
             "x": 24,
             "y": 10,
-            "forecast_days": 3,
+            "forecast_count": 3,
         },
         _WEATHER_STATES,
     ),

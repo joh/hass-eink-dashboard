@@ -417,8 +417,15 @@ export interface WeatherWidget extends WidgetBase {
   type: "weather";
   /** HA weather entity ID. */
   entity?: string;
-  /** Number of forecast days to display (0–14). */
-  forecast_days?: number;
+  /** Number of forecast entries to display (0–48). */
+  forecast_count?: number;
+  /**
+   * Forecast granularity. `"daily"` (default) shows one column per
+   * day with a weekday label and hi/lo temperatures; `"hourly"`
+   * shows one column per hour with a time label and a single
+   * temperature.
+   */
+  forecast_type?: "daily" | "hourly";
   /**
    * Optional sensor entity that overrides the weather entity's
    * temperature attribute. When set, the sensor's state is used

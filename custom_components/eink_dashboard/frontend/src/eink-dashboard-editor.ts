@@ -95,7 +95,8 @@ export const WIDGET_TYPES: Record<string, WidgetTypeMeta> = {
       entity: "",
       x: 24,
       y: 0,
-      forecast_days: 5,
+      forecast_type: "daily",
+      forecast_count: 5,
       font_size: FONT_SIZE_WEATHER,
       card_style: DEFAULT_CARD_STYLE,
     },
@@ -707,9 +708,22 @@ export const SCHEMAS: Record<
           selector: { entity: { domain: "weather" } },
         },
         {
-          name: "forecast_days",
+          name: "forecast_type",
+          default: "daily",
+          selector: {
+            select: {
+              options: [
+                { value: "daily", label: "Daily" },
+                { value: "hourly", label: "Hourly" },
+              ],
+              mode: "dropdown",
+            },
+          },
+        },
+        {
+          name: "forecast_count",
           default: 5,
-          selector: { number: { min: 0, max: 14, mode: "box" } },
+          selector: { number: { min: 0, max: 48, mode: "box" } },
         },
         {
           name: "temperature_entity",
@@ -1615,7 +1629,8 @@ export const LABELS: Record<string, string> = {
   layout: "Layout",
   show_all: "Show all upcoming dates",
   entries: "Entries",
-  forecast_days: "Forecast days",
+  forecast_count: "Forecast count",
+  forecast_type: "Forecast type",
   temperature_entity: "Temperature sensor",
   humidity_entity: "Humidity sensor",
   graph: "Graph type",

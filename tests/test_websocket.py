@@ -526,6 +526,58 @@ class TestWsRenderWidget:
         assert result["success"]
         assert result["result"]["svg"] == "<svg/>"
 
+    async def test_fetches_hourly_forecast_for_hourly_weather_widget(
+        self, hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+    ) -> None:
+        # With forecast_type="hourly" the service call uses
+        # type="hourly" and the payload lands in
+        # attrs["forecast_hourly"], leaving attrs["forecast"]
+        # untouched.
+        hass.states.async_set("weather.home", "rainy", {"temperature": 9.8})
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "forecast_type": "hourly",
+        }
+        client, entry = await _setup_entry(
+            hass, hass_ws_client, widgets=[widget]
+        )
+        forecast_payload = [
+            {"datetime": "2026-05-15T14:00:00", "temperature": 10}
+        ]
+
+        captured_config: dict[str, Any] = {}
+
+        def _capture(w: Any, cfg: dict[str, Any]) -> str:
+            captured_config.update(copy.deepcopy(cfg))
+            return "<svg/>"
+
+        with (
+            patch(
+                "homeassistant.core.ServiceRegistry.async_call",
+                AsyncMock(
+                    return_value={
+                        "weather.home": {"forecast": forecast_payload}
+                    }
+                ),
+            ) as mock_call,
+            patch(_RENDER_SVG_TARGET, side_effect=_capture),
+        ):
+            result = await _send_render_widget(client, entry.entry_id, 0)
+
+        attrs = captured_config["states"]["weather.home"]["attributes"]
+        assert attrs["forecast_hourly"] == forecast_payload
+        assert "forecast" not in attrs
+        mock_call.assert_called_once_with(
+            "weather",
+            "get_forecasts",
+            {"entity_id": "weather.home", "type": "hourly"},
+            blocking=True,
+            return_response=True,
+        )
+        assert result["success"]
+        assert result["result"]["svg"] == "<svg/>"
+
 
 class TestWsRenderWidgets:
     async def test_returns_all_svgs(
@@ -695,6 +747,69 @@ class TestWsRenderWidgets:
         )
         assert result["success"]
         assert result["result"]["svgs"] == ["<svg/>"]
+
+    async def test_fetches_daily_and_hourly_for_shared_entity(
+        self, hass: HomeAssistant, hass_ws_client: WebSocketGenerator
+    ) -> None:
+        # Two widgets referencing the same weather entity with
+        # different forecast_type values each get their own service
+        # call; daily lands in attrs["forecast"], hourly in
+        # attrs["forecast_hourly"].
+        hass.states.async_set("weather.home", "rainy", {"temperature": 9.8})
+        widgets = [
+            {"type": "weather", "entity": "weather.home"},
+            {
+                "type": "weather",
+                "entity": "weather.home",
+                "forecast_type": "hourly",
+            },
+        ]
+        client, entry = await _setup_entry(
+            hass, hass_ws_client, widgets=widgets
+        )
+        daily_payload = [
+            {"datetime": "2026-05-15T00:00:00", "temperature": 10}
+        ]
+        hourly_payload = [
+            {"datetime": "2026-05-15T14:00:00", "temperature": 11}
+        ]
+
+        captured_configs: list[dict[str, Any]] = []
+
+        def _capture(w: Any, cfg: dict[str, Any]) -> str:
+            captured_configs.append(copy.deepcopy(cfg))
+            return "<svg/>"
+
+        def _fake_call(*args: Any, **kwargs: Any) -> Any:
+            # Return the payload matching the requested forecast
+            # type so both service calls can be distinguished.
+            # service_data is the third positional argument.
+            data = args[2] if len(args) > 2 else kwargs.get("service_data")
+            if isinstance(data, dict) and data.get("type") == "hourly":
+                return {"weather.home": {"forecast": hourly_payload}}
+            return {"weather.home": {"forecast": daily_payload}}
+
+        with (
+            patch(
+                "homeassistant.core.ServiceRegistry.async_call",
+                AsyncMock(side_effect=_fake_call),
+            ) as mock_call,
+            patch(_RENDER_SVG_TARGET, side_effect=_capture),
+        ):
+            result = await _send_render_widgets(client, entry.entry_id)
+
+        assert captured_configs, "renderer was not called"
+        attrs = captured_configs[0]["states"]["weather.home"]["attributes"]
+        assert attrs["forecast"] == daily_payload
+        assert attrs["forecast_hourly"] == hourly_payload
+        assert mock_call.call_count == 2
+        called_types = {
+            (c.args[2].get("type") if len(c.args) > 2 else None)
+            for c in mock_call.call_args_list
+        }
+        assert called_types == {"daily", "hourly"}
+        assert result["success"]
+        assert result["result"]["svgs"] == ["<svg/>", "<svg/>"]
 
     @pytest.mark.parametrize(
         "bad_widgets",

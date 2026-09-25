@@ -375,47 +375,70 @@ async def _fetch_forecasts(
     widgets: list[dict[str, Any]],
     states: dict[str, Any],
 ) -> None:
-    """Fetch daily forecasts for weather widgets and inject into states.
+    """Fetch forecasts for weather widgets and inject into states.
 
     Calls the ``weather.get_forecasts`` service for each unique
     weather entity referenced by ``widgets`` and writes the forecast
-    list into ``states[entity_id]["attributes"]["forecast"]`` so
-    ``render_widget_svg`` sees the same data as the scheduled image
-    render path.
+    list into the matching attribute so ``render_widget_svg`` sees
+    the same data as the scheduled image render path: daily
+    forecasts go to ``states[entity_id]["attributes"]["forecast"]``
+    and hourly forecasts to
+    ``states[entity_id]["attributes"]["forecast_hourly"]``.
+
+    Both types are fetched whenever widgets referencing the same
+    entity request both, so a dashboard can mix daily and hourly
+    widgets on the same weather entity without one type overwriting
+    the other.
 
     Args:
         hass: Home Assistant instance.
         widgets: Widget dicts to scan for weather entity IDs.
         states: Mutable states dict built by ``_build_display_config``.
     """
-    weather_entities: set[str] = set()
+    weather_entities: dict[str, set[str]] = {}
     for w in widgets:
         # WidgetType is a StrEnum: wire-format strings compare equal.
         if w.get("type") == WidgetType.WEATHER:
             eid = w.get("entity", "")
             if eid and eid in states:
-                weather_entities.add(eid)
+                forecast_type = (
+                    "hourly" if w.get("forecast_type") == "hourly" else "daily"
+                )
+                weather_entities.setdefault(eid, set()).add(forecast_type)
 
-    for entity_id in weather_entities:
-        try:
-            result = await hass.services.async_call(
-                "weather",
-                "get_forecasts",
-                {"entity_id": entity_id, "type": "daily"},
-                blocking=True,
-                return_response=True,
-            )
-            if result is None:
-                continue
-            entity_data = result.get(entity_id)
-            forecast = (
-                entity_data.get("forecast")
-                if isinstance(entity_data, dict)
-                else None
-            ) or []
-            states[entity_id]["attributes"]["forecast"] = forecast
-        except Exception:  # noqa: BLE001
-            _LOGGER.debug("Could not fetch forecast for %s", entity_id)
+    for entity_id, forecast_types in weather_entities.items():
+        for forecast_type in forecast_types:
+            try:
+                result = await hass.services.async_call(
+                    "weather",
+                    "get_forecasts",
+                    {
+                        "entity_id": entity_id,
+                        "type": forecast_type,
+                    },
+                    blocking=True,
+                    return_response=True,
+                )
+                if result is None:
+                    continue
+                entity_data = result.get(entity_id)
+                forecast = (
+                    entity_data.get("forecast")
+                    if isinstance(entity_data, dict)
+                    else None
+                ) or []
+                target = (
+                    "forecast_hourly"
+                    if forecast_type == "hourly"
+                    else "forecast"
+                )
+                states[entity_id]["attributes"][target] = forecast
+            except Exception:  # noqa: BLE001
+                _LOGGER.debug(
+                    "Could not fetch %s forecast for %s",
+                    forecast_type,
+                    entity_id,
+                )
 
 
 async def _fetch_history(

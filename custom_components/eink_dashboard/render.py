@@ -547,6 +547,30 @@ def _weekday_abbrev(d: date, language: str) -> str:
     return _babel_format_date(d, "EEE", language)
 
 
+def _hour_label(value: datetime, time_format: str) -> str:
+    """Format a forecast hour as a short time label.
+
+    Mirrors the clock conventions of :func:`_format_calendar_label`:
+    ``"12"`` selects the 12-hour clock with AM/PM, while any other
+    value (``"24"``, ``"language"``, ``"system"``) renders the
+    24-hour clock.
+
+    Args:
+        value: Forecast entry datetime (HA wall-clock time).
+        time_format: ``"12"`` for 12-hour with AM/PM (e.g.
+            ``"2:30 PM"``), any other value for 24-hour (e.g.
+            ``"14:30"``).
+
+    Returns:
+        A short time label such as ``"14:30"`` or ``"2:30 PM"``.
+    """
+    if time_format == "12":
+        ampm = "AM" if value.hour < 12 else "PM"
+        h12 = value.hour % 12 or 12
+        return f"{h12}:{value.minute:02d} {ampm}"
+    return f"{value.hour}:{value.minute:02d}"
+
+
 def _month_abbrev(d: date, language: str) -> str:
     """Return a locale-appropriate abbreviated month name.
 

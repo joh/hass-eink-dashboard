@@ -384,10 +384,14 @@ class EinkDashboardImage(ImageEntity):
         await _enrich_entity_icons(self.hass, states)
 
     async def _async_fetch_forecasts(self, states: dict[str, Any]) -> None:
-        """Fetch daily forecasts for weather widgets and inject into states.
+        """Fetch forecasts for weather widgets and inject into states.
 
         Delegates to the module-level ``_fetch_forecasts`` so the
         logic is shared with the WebSocket preview handlers.
+
+        Args:
+            states: Mutable states dict; forecast lists are injected
+                in-place under each weather entity's attributes.
         """
         await _fetch_forecasts(self.hass, self._widgets, states)
 

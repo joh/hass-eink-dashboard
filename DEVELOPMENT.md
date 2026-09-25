@@ -130,7 +130,7 @@ The `--data` flag accepts a JSON file with two keys:
     "entity": "weather.home",
     "x": 24,
     "y": 10,
-    "forecast_days": 3
+    "forecast_count": 3
   },
   "states": {
     "weather.home": {

@@ -165,6 +165,27 @@ describe("SCHEMAS", () => {
     const field = findField(schema, "humidity_entity");
     expect(field?.selector?.entity).toMatchObject({ domain: "sensor" });
   });
+
+  it("weather forecast_type field offers daily and hourly", () => {
+    const schema = SCHEMAS.weather(DISPLAY);
+    const field = findField(schema, "forecast_type");
+    expect(field?.default).toBe("daily");
+    expect(field?.selector?.select?.options).toEqual([
+      { value: "daily", label: "Daily" },
+      { value: "hourly", label: "Hourly" },
+    ]);
+  });
+
+  it("weather forecast_count field spans 0 to 48", () => {
+    // A single count drives both daily and hourly forecasts; 48
+    // covers a full 48-hour hourly window.
+    const schema = SCHEMAS.weather(DISPLAY);
+    const field = findField(schema, "forecast_count");
+    expect(field?.selector?.number).toMatchObject({
+      min: 0,
+      max: 48,
+    });
+  });
 });
 
 // ── LABELS ───────────────────────────────────────────────────────

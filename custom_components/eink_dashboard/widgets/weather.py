@@ -165,6 +165,41 @@ def _cap_weather_font_xl(
     return font_xl_size
 
 
+def _forecast_label(
+    dt_str: str | None,
+    hourly: bool,
+    time_format: str,
+    lang: str,
+) -> str:
+    """Return the column label for one forecast entry.
+
+    Hourly mode shows the entry's wall-clock time (clock style
+    from *time_format*); daily mode shows the abbreviated
+    weekday name in *lang*.
+
+    Args:
+        dt_str: ISO 8601 datetime from the forecast entry,
+            or ``None`` when absent.
+        hourly: ``True`` when the widget is in hourly mode.
+        time_format: ``"12"`` for 12-hour labels, any other
+            value for 24-hour labels.
+        lang: BCP 47 language code for weekday names.
+
+    Returns:
+        The label string, or ``""`` when *dt_str* is missing.
+    """
+    # Lazy import avoids circular dependency: render.py imports
+    # svg_render.py, which imports the widget builders.
+    from ..render import _hour_label, _weekday_abbrev
+
+    if not dt_str:
+        return ""
+    parsed = datetime.fromisoformat(dt_str)
+    if hourly:
+        return _hour_label(parsed, time_format)
+    return _weekday_abbrev(parsed.date(), lang)
+
+
 def _build_weather_context(
     widget: Widget,
     config: DisplayConfig,
@@ -177,10 +212,15 @@ def _build_weather_context(
     Args:
         widget: Widget config dict.  Recognised keys:
             ``entity``, ``x``, ``y``, ``w``, ``font_size``,
-            ``forecast_days``, ``card_style``,
+            ``forecast_type``, ``forecast_count``,
+            ``forecast_days`` (deprecated alias for
+            ``forecast_count``), ``card_style``,
             ``temperature_entity``, ``humidity_entity``.
         config: Display config with ``width``, ``height``,
-            ``states``, ``display_levels``.
+            ``states``, ``display_levels``.  Forecast data is read
+            from the weather entity's ``forecast`` attribute
+            (daily mode) or ``forecast_hourly`` attribute (hourly
+            mode); both are populated by ``_fetch_forecasts``.
 
     Returns:
         Template context dict consumed by ``weather.svg.j2``.
@@ -194,7 +234,6 @@ def _build_weather_context(
         _compute_metrics,
         _fmt_temp,
         _load_font,
-        _weekday_abbrev,
         format_number,
     )
 
@@ -218,7 +257,18 @@ def _build_weather_context(
         }
 
     font_size = widget.get("font_size", FONT_SIZE_WEATHER)
-    forecast_days = widget.get("forecast_days", 5)
+    # forecast_count is the canonical key; forecast_days is a
+    # deprecated alias kept so pre-rename saved layouts keep their
+    # configured entry count.
+    forecast_count = widget.get(
+        "forecast_count", widget.get("forecast_days", 5)
+    )
+    # "hourly" switches the forecast strip from per-day columns
+    # (weekday + hi/lo) to per-hour columns (time + single temp)
+    # and reads the hourly forecast attribute; the top-row hi/lo
+    # always comes from the daily forecast.
+    forecast_type = str(widget.get("forecast_type", "daily"))
+    time_format = str(config.get("time_format", "24"))
     card_style = widget.get("card_style", DEFAULT_CARD_STYLE)
     display_levels = config.get("display_levels", 16)
 
@@ -254,7 +304,9 @@ def _build_weather_context(
     pressure = attrs.get("pressure")
     pressure_unit = attrs.get("pressure_unit", "hPa")
     cloud_coverage = attrs.get("cloud_coverage")
-    forecast = attrs.get("forecast", [])
+    daily_forecast = attrs.get("forecast", [])
+    hourly_forecast = attrs.get("forecast_hourly", [])
+    forecast = hourly_forecast if forecast_type == "hourly" else daily_forecast
 
     # Optional sensor overrides for temperature and humidity.
     # When a sensor entity is configured and present in states, its
@@ -310,7 +362,7 @@ def _build_weather_context(
     # Total card height, matching PIL's formula exactly.
     row1_h = top_pad + max(icon_size, temp_h)
     detail_h = detail_gap + detail_icon_h
-    has_forecast = bool(forecast) and forecast_days > 0
+    has_forecast = bool(forecast) and forecast_count > 0
     if has_forecast:
         forecast_section_h = (
             sep_gap + sep_thickness + sep_gap + forecast_zone_h + precip_text_h
@@ -476,7 +528,7 @@ def _build_weather_context(
     sep_y = 0
 
     if has_forecast:
-        forecast_cols = max(forecast_days, _WX_MIN_FC_COLS)
+        forecast_cols = max(forecast_count, _WX_MIN_FC_COLS)
         col_width = content_w // forecast_cols
         content_width = forecast_cols * col_width
         separator_y = detail_bottom + sep_gap
@@ -490,26 +542,22 @@ def _build_weather_context(
         forecast_y = separator_y + sep_thickness + sep_gap
         fc_icon_size = round(_WX_FC_ICON * scale)
 
-        if forecast_days >= forecast_cols:
-            col_positions = list(range(forecast_days))
-        elif forecast_days <= 1:
+        if forecast_count >= forecast_cols:
+            col_positions = list(range(forecast_count))
+        elif forecast_count <= 1:
             col_positions = [forecast_cols // 2]
         else:
             col_positions = [
-                round(i * (forecast_cols - 1) / (forecast_days - 1))
-                for i in range(forecast_days)
+                round(i * (forecast_cols - 1) / (forecast_count - 1))
+                for i in range(forecast_count)
             ]
 
-        for idx, day in enumerate(forecast[:forecast_days]):
+        hourly = forecast_type == "hourly"
+        for idx, day in enumerate(forecast[:forecast_count]):
             col_i = col_positions[idx]
             cx = content_left + col_width * col_i + col_width // 2
             dt_str = day.get("datetime")
-            if dt_str:
-                day_label = _weekday_abbrev(
-                    datetime.fromisoformat(dt_str).date(), lang
-                )
-            else:
-                day_label = ""
+            day_label = _forecast_label(dt_str, hourly, time_format, lang)
 
             day_condition = day.get("condition", "")
             try:
@@ -520,7 +568,9 @@ def _build_weather_context(
                 fc_icon_svg = ""
 
             fc_hi_val = day.get("temperature", "")
-            fc_lo_val = day.get("templow", "")
+            # Hourly entries carry a single temperature; templow
+            # is absent and would be meaningless anyway.
+            fc_lo_val = "" if hourly else day.get("templow", "")
             fc_hi = (
                 f"{_fmt_temp(fc_hi_val, nf, lang)}°" if fc_hi_val != "" else ""
             )

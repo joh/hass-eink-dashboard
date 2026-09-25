@@ -92,7 +92,7 @@ WIDGET = {
     "y": 0,
     "width": 1,
     "height": 1,
-    "forecast_days": 3,
+    "forecast_count": 3,
 }
 
 RENDERS = [

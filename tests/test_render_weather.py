@@ -107,7 +107,7 @@ class TestRenderWeather:
                 "entity": "weather.home",
                 "x": PADDING,
                 "y": 10,
-                "forecast_days": 3,
+                "forecast_count": 3,
             }
         ]
         img = render_to_image(widgets, self._config())
@@ -177,7 +177,7 @@ class TestRenderWeather:
                 "entity": "weather.home",
                 "x": PADDING,
                 "y": 10,
-                "forecast_days": 3,
+                "forecast_count": 3,
             }
         ]
         config = self._config(width=800, height=480)
@@ -226,7 +226,7 @@ class TestRenderWeather:
                 "entity": "weather.home",
                 "x": PADDING,
                 "y": 10,
-                "forecast_days": 3,
+                "forecast_count": 3,
             }
         ]
         img = render_to_image(widgets, self._config())
@@ -241,7 +241,7 @@ class TestRenderWeather:
                 "entity": "weather.home",
                 "x": PADDING,
                 "y": 10,
-                "forecast_days": 3,
+                "forecast_count": 3,
             }
         ]
         img = render_to_image(widgets, self._config())
@@ -318,7 +318,7 @@ class TestRenderWeather:
                 "entity": "weather.home",
                 "x": PADDING,
                 "y": 10,
-                "forecast_days": 3,
+                "forecast_count": 3,
             }
         ]
         img = render_to_image(widgets, self._config())
@@ -367,7 +367,7 @@ class TestRenderWeather:
                 "entity": "weather.home",
                 "x": PADDING,
                 "y": 10,
-                "forecast_days": 3,
+                "forecast_count": 3,
             }
         ]
         img = render_to_image(widgets, self._config())
@@ -390,7 +390,7 @@ class TestRenderWeather:
                 "x": 0,
                 "y": 0,
                 "w": 400,
-                "forecast_days": 3,
+                "forecast_count": 3,
             }
         ]
         img = render_to_image(widgets, self._config())
@@ -619,7 +619,7 @@ _BASE_WIDGET: dict[str, object] = {
     "x": PADDING,
     "y": 0,
     "w": 400,
-    "forecast_days": 0,
+    "forecast_count": 0,
 }
 
 _BASE_CONFIG: dict[str, object] = {
@@ -741,7 +741,7 @@ class TestWeatherForecastLanguage:
         "entity": "weather.home",
         "x": PADDING,
         "y": 0,
-        "forecast_days": 3,
+        "forecast_count": 3,
     }
 
     def test_default_language_uses_english_day_labels(self) -> None:
@@ -759,3 +759,151 @@ class TestWeatherForecastLanguage:
         )
         labels = [e["label"] for e in ctx["forecast_entries"]]
         assert labels == ["Sa.", "So.", "Mo."]
+
+    def test_forecast_days_backwards_compatible(self) -> None:
+        # The pre-rename forecast_days key must still be honoured so
+        # existing saved layouts keep their configured entry count.
+        widget = {
+            "type": "weather",
+            "entity": "weather.home",
+            "x": PADDING,
+            "y": 0,
+            "forecast_days": 2,
+        }
+        ctx = _build_weather_context(widget, self._CONFIG)
+        labels = [e["label"] for e in ctx["forecast_entries"]]
+        assert labels == ["Sat", "Sun"]
+
+
+MOCK_HOURLY_STATE = {
+    "weather.home": {
+        "state": "rainy",
+        "attributes": {
+            "temperature": 14,
+            "temperature_unit": "\u00b0C",
+            "humidity": 80,
+            "precipitation_unit": "mm",
+            # Daily forecast (top-row hi/lo source); present so tests
+            # can verify hourly mode reads forecast_hourly, not
+            # forecast.
+            "forecast": [
+                {
+                    "datetime": "2026-05-02T12:00:00",
+                    "temperature": 18,
+                    "templow": 10,
+                    "condition": "rainy",
+                    "precipitation": 0,
+                },
+            ],
+            "forecast_hourly": [
+                {
+                    "datetime": "2026-05-02T13:00:00",
+                    "temperature": 14,
+                    "condition": "rainy",
+                    "precipitation": 0,
+                },
+                {
+                    "datetime": "2026-05-02T14:30:00",
+                    "temperature": 15,
+                    "condition": "rainy",
+                    "precipitation": 2,
+                },
+                {
+                    "datetime": "2026-05-02T15:00:00",
+                    "temperature": 16,
+                    "condition": "cloudy",
+                    "precipitation": 0,
+                },
+            ],
+        },
+    },
+}
+
+
+class TestWeatherHourlyForecast:
+    """Hourly forecast mode (forecast_type="hourly")."""
+
+    _CONFIG: ClassVar[dict[str, object]] = {
+        "width": 600,
+        "height": 400,
+        "states": MOCK_HOURLY_STATE,
+    }
+    _WIDGET: ClassVar[dict[str, object]] = {
+        "type": "weather",
+        "entity": "weather.home",
+        "x": PADDING,
+        "y": 0,
+        "w": 400,
+        "forecast_type": "hourly",
+        "forecast_count": 3,
+    }
+
+    def _ctx(self, **overrides: object) -> dict[str, object]:
+        return _build_weather_context(
+            self._WIDGET, {**self._CONFIG, **overrides}
+        )
+
+    def test_hourly_labels_are_times(self) -> None:
+        # Hourly mode labels columns with the entry's wall-clock
+        # time (24-hour by default), not a weekday name.
+        ctx = self._ctx()
+        labels = [e["label"] for e in ctx["forecast_entries"]]
+        assert labels == ["13:00", "14:30", "15:00"]
+
+    def test_hourly_labels_twelve_hour(self) -> None:
+        # time_format="12" renders hourly labels with AM/PM.
+        ctx = self._ctx(time_format="12")
+        labels = [e["label"] for e in ctx["forecast_entries"]]
+        assert labels == ["1:00 PM", "2:30 PM", "3:00 PM"]
+
+    def test_hourly_entries_have_no_low_temp(self) -> None:
+        # Hourly entries carry a single temperature; the low
+        # temperature line must be empty for every column.
+        ctx = self._ctx()
+        entries = ctx["forecast_entries"]
+        assert entries, "expected forecast entries"
+        for e in entries:
+            assert e["lo"] == ""
+
+    def test_hourly_entry_temperatures(self) -> None:
+        # Each hourly column shows its entry temperature.
+        ctx = self._ctx()
+        his = [e["hi"] for e in ctx["forecast_entries"]]
+        assert his == ["14\u00b0", "15\u00b0", "16\u00b0"]
+
+    def test_hourly_precipitation(self) -> None:
+        # Precipitation is shown per entry only when > 0.
+        ctx = self._ctx()
+        precs = [e["precip"] for e in ctx["forecast_entries"]]
+        assert precs == ["", "2mm", ""]
+
+    def test_hourly_respects_forecast_count(self) -> None:
+        # forecast_count limits the number of hourly columns.
+        ctx = _build_weather_context(
+            {**self._WIDGET, "forecast_count": 2}, self._CONFIG
+        )
+        labels = [e["label"] for e in ctx["forecast_entries"]]
+        assert labels == ["13:00", "14:30"]
+
+    def test_hourly_mode_reads_hourly_attribute(self) -> None:
+        # When both forecast (daily) and forecast_hourly attributes
+        # are present, hourly mode must render from
+        # forecast_hourly — time labels, not weekday names.
+        ctx = self._ctx()
+        labels = [e["label"] for e in ctx["forecast_entries"]]
+        assert all(":" in label for label in labels)
+
+    def test_daily_mode_reads_daily_attribute(self) -> None:
+        # Daily mode must ignore forecast_hourly and render from
+        # forecast — weekday labels.
+        widget = {**self._WIDGET, "forecast_type": "daily"}
+        ctx = _build_weather_context(widget, self._CONFIG)
+        labels = [e["label"] for e in ctx["forecast_entries"]]
+        assert labels == ["Sat"]
+
+    def test_weather_hourly_draws_forecast(self) -> None:
+        # The hourly forecast strip renders icons and text below
+        # the detail row, like the daily forecast strip.
+        widgets = [dict(self._WIDGET)]
+        img = render_to_image(widgets, self._CONFIG)
+        assert_has_dark_pixels(img, 50, 110, 430, 200)
