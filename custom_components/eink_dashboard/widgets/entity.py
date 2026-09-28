@@ -16,7 +16,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     import markupsafe
@@ -42,6 +42,75 @@ from ._helpers import (
 )
 
 
+def _split_long_word(word: str, font: Any, max_w: float) -> list[str]:
+    """Break a single word longer than ``max_w`` into fitting pieces.
+
+    Args:
+        word: The word that does not fit on a line by itself.
+        font: A loaded PIL font used to measure text width.
+        max_w: Maximum allowed pixel width per piece.
+
+    Returns:
+        List of non-empty pieces, each fitting within ``max_w``.
+    """
+    parts: list[str] = []
+    rest = word
+    while round(font.getlength(rest)) > max_w:
+        # Binary-search the longest prefix that fits.
+        lo, hi = 1, len(rest)
+        while lo < hi:
+            mid = (lo + hi + 1) // 2
+            if round(font.getlength(rest[:mid])) <= max_w:
+                lo = mid
+            else:
+                hi = mid - 1
+        parts.append(rest[:lo])
+        rest = rest[lo:]
+    if rest:
+        parts.append(rest)
+    return parts
+
+
+def _wrap_text(text: str, font: Any, max_w: float) -> list[str]:
+    """Wrap ``text`` into lines that each fit within ``max_w`` pixels.
+
+    Words are packed greedily onto lines at whitespace boundaries;
+    a single word longer than ``max_w`` is broken at character level
+    so no line ever overflows the available width.
+
+    Args:
+        text: String to wrap.
+        font: A loaded PIL font used to measure text width.
+        max_w: Maximum allowed pixel width per line.
+
+    Returns:
+        Non-empty list of lines, each with measured width
+        ``<= max_w`` (empty input yields ``[""]``).
+    """
+    if not text:
+        return [""]
+    lines: list[str] = []
+    current = ""
+    for word in text.split():
+        if round(font.getlength(word)) > max_w:
+            # Word alone exceeds the line width: flush the current
+            # line, then break the word character-by-character.
+            if current:
+                lines.append(current)
+                current = ""
+            lines.extend(_split_long_word(word, font, max_w))
+            continue
+        candidate = word if not current else f"{current} {word}"
+        if round(font.getlength(candidate)) <= max_w:
+            current = candidate
+        else:
+            lines.append(current)
+            current = word
+    if current:
+        lines.append(current)
+    return lines
+
+
 def _build_entity_context(
     widget: Widget,
     config: DisplayConfig,
@@ -54,6 +123,14 @@ def _build_entity_context(
     below the value+unit line. The icon is a secondary/decorative
     element next to the black value, so its non-filled states
     render gray rather than black — matching the name's weight.
+
+    Value and name text that is wider than the text column wraps
+    onto additional lines inside the widget instead of overflowing
+    the right edge; a single long token (no whitespace) breaks at
+    character level. If the wrapped block would be taller than the
+    widget, all three fonts shrink together in 2 px steps and the
+    text is re-wrapped until the block fits or the value font
+    reaches its 8 px floor.
 
     Icon style controls circle rendering, with automatic resolution
     based on entity state when ``icon_style`` is omitted:
@@ -235,37 +312,86 @@ def _build_entity_context(
     # headline number sized comparably to the icon next to it, not a
     # small caption dwarfed by it.
     row_ref = svg_h // 2
-    value_font_sz = max(10, round(row_ref * 0.42))
-    unit_font_sz = max(10, round(row_ref * 0.22))
-    name_font_sz = max(10, round(row_ref * 0.20))
-
-    # Value and name are stacked tightly (small line gap, mirroring
-    # card_row's primary/secondary spacing) and the whole two-line
-    # block is vertically centered in the widget, rather than pinned
-    # to fixed fractions of svg_h — this keeps the gap between the
-    # two lines minimal regardless of height.
     line_gap = max(2, round(svg_h * 0.04))
-    if name_position == "top":
-        block_h = name_font_sz + line_gap + value_font_sz
-        top = (svg_h - block_h) // 2
-        name_y = top + name_font_sz // 2
-        value_y = top + name_font_sz + line_gap + value_font_sz
-    else:
-        block_h = value_font_sz + line_gap + name_font_sz
-        top = (svg_h - block_h) // 2
-        value_y = top + value_font_sz
-        name_y = top + value_font_sz + line_gap + name_font_sz // 2
+    unit_gap = max(2, round(svg_h * 0.02))
+    max_text_w = max(0, text_x1 - text_x0)
+    base_value_sz = max(10, round(row_ref * 0.42))
+    base_unit_sz = max(10, round(row_ref * 0.22))
+    base_name_sz = max(10, round(row_ref * 0.20))
 
-    value_x = text_x0
-    unit_x = value_x
-    if unit_text:
+    # Value and name wrap inside the text column (see _wrap_text).
+    # Value and name are stacked tightly (small line gap, mirroring
+    # card_row's primary/secondary spacing) and the whole block is
+    # vertically centered in the widget, rather than pinned to fixed
+    # fractions of svg_h — this keeps the gap between the two lines
+    # minimal regardless of height.  When the wrapped block would be
+    # taller than the widget, all three fonts shrink together in
+    # 2 px steps and the text is re-wrapped until the block fits or
+    # the value font reaches its legibility floor.
+    shrink = 0
+    while True:
+        value_font_sz = max(8, base_value_sz - shrink)
+        unit_font_sz = max(8, base_unit_sz - shrink)
+        name_font_sz = max(10, base_name_sz - shrink)
         value_font = _load_font(
             value_font_sz, medium=not value_bold, bold=value_bold
         )
-        text_w = round(value_font.getlength(value_text))
-        unit_gap = max(2, round(svg_h * 0.02))
-        unit_x = value_x + text_w + unit_gap
-    unit_y = value_y
+        name_font = _load_font(name_font_sz, medium=True)
+        value_lines = _wrap_text(value_text, value_font, max_text_w)
+        name_lines: list[str] = (
+            [] if hide_name else _wrap_text(name_text, name_font, max_text_w)
+        )
+        # Unit: inline right of the last wrapped value line when it
+        # fits there, otherwise on its own line below it.
+        last_line_w = round(value_font.getlength(value_lines[-1]))
+        unit_w = (
+            round(_load_font(unit_font_sz).getlength(unit_text))
+            if unit_text
+            else 0
+        )
+        unit_inline = (
+            bool(unit_text) and last_line_w + unit_gap + unit_w <= max_text_w
+        )
+        value_line_h = round(value_font_sz * 1.2)
+        name_line_h = round(name_font_sz * 1.2)
+        value_rows = len(value_lines) + (
+            0 if unit_inline else (1 if unit_text else 0)
+        )
+        value_block_h = (value_rows - 1) * value_line_h + value_font_sz
+        # A hidden name still reserves its original single-line
+        # height so the block geometry matches the pre-wrap layout.
+        if name_lines:
+            name_block_h = (len(name_lines) - 1) * name_line_h + name_font_sz
+        else:
+            name_block_h = name_font_sz
+        block_h = name_block_h + line_gap + value_block_h
+        if block_h <= svg_h or value_font_sz <= 8:
+            break
+        shrink += 2
+
+    top = (svg_h - block_h) // 2
+    if name_position == "top":
+        name_y = top + name_font_sz // 2
+        value_y = top + name_block_h + line_gap + value_font_sz
+    else:
+        value_y = top + value_font_sz
+        name_y = top + value_block_h + line_gap + name_font_sz // 2
+
+    value_x = text_x0
+    # One baseline per wrapped value line; subsequent baselines step
+    # down by the value line height.
+    value_ys = [value_y + i * value_line_h for i in range(len(value_lines))]
+    if unit_text:
+        if unit_inline:
+            unit_x = value_x + last_line_w + unit_gap
+            unit_y = value_y + (len(value_lines) - 1) * value_line_h
+        else:
+            unit_x = value_x
+            unit_y = value_y + len(value_lines) * value_line_h
+    else:
+        unit_x = value_x
+        unit_y = value_y
+    name_ys = [name_y + i * name_line_h for i in range(len(name_lines))]
 
     if name_align == "right":
         name_x = text_x1
@@ -297,7 +423,8 @@ def _build_entity_context(
         "letter": letter,
         "letter_font_sz": m_icon.font_letter,
         # Value + unit.
-        "value_text": value_text,
+        "value_lines": value_lines,
+        "value_ys": value_ys,
         "value_x": value_x,
         "value_y": value_y,
         "value_font_sz": value_font_sz,
@@ -308,7 +435,8 @@ def _build_entity_context(
         "unit_font_sz": unit_font_sz,
         # Name.
         "hide_name": hide_name,
-        "name_text": name_text,
+        "name_lines": name_lines,
+        "name_ys": name_ys,
         "name_x": name_x,
         "name_y": name_y,
         "name_font_sz": name_font_sz,

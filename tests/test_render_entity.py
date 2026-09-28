@@ -37,6 +37,7 @@ from tests.helpers import (
     assert_has_gray_pixels,
     assert_no_gray_pixels,
     assert_scales_proportionally,
+    assert_vertically_centered,
     content_bbox,
     make_config,
     render_to_image,
@@ -1481,3 +1482,273 @@ class TestRenderEntity:
         m = re.search(r'height="(\d+)"', svg)
         assert m is not None
         assert int(m.group(1)) == 200
+
+
+MOCK_ENTITY_WRAP_STATES = {
+    # Short value and short name: the baseline single-line case.
+    "sensor.wrap_short": {
+        "state": "22.5",
+        "attributes": {
+            "friendly_name": "Short",
+            "device_class": "temperature",
+            "unit_of_measurement": "°C",
+        },
+    },
+    # Value is too wide for the text column at the default font
+    # size, so it must wrap to two lines.
+    "sensor.wrap_value": {
+        "state": "one two three four five six seven",
+        "attributes": {
+            "friendly_name": "Wrap Value",
+            "device_class": "temperature",
+            "unit_of_measurement": "°C",
+        },
+    },
+    # Single long token with no whitespace: forces character-level
+    # line breaking.
+    "sensor.wrap_token": {
+        "state": "abcdefghijklmnopqrstuvwxyz012345",
+        "attributes": {
+            "friendly_name": "Token",
+            "device_class": "temperature",
+        },
+    },
+    # Value long enough that wrapping alone cannot keep the block
+    # inside the widget height — the font must shrink.
+    "sensor.wrap_huge": {
+        "state": (
+            "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj "
+            "kkkk llll mmmm nnnn oooo pppp qqqq rrrr ssss tttt"
+        ),
+        "attributes": {
+            "friendly_name": "Huge",
+            "device_class": "temperature",
+        },
+    },
+    # Name is too wide for the text column: the gray name label must
+    # wrap instead of overflowing the widget.
+    "sensor.wrap_name": {
+        "state": "22.5",
+        "attributes": {
+            "friendly_name": (
+                "Living Room Kitchen Window Outdoor Sensor "
+                "Living Room Kitchen Window Outdoor Sensor"
+            ),
+            "device_class": "temperature",
+            "unit_of_measurement": "°C",
+        },
+    },
+}
+
+
+def _line_runs(
+    img: Image.Image,
+    x1: int,
+    y1: int,
+    x2: int,
+    y2: int,
+    low: int,
+    high: int,
+    *,
+    min_pixels: int = 8,
+    gap: int = 2,
+) -> list[tuple[int, int]]:
+    """Return the (top, bottom) y-runs of text lines in a region.
+
+    Scans the region row by row and keeps rows holding at least
+    ``min_pixels`` pixels within the tone band ``[low, high)`` (so
+    black value text and gray name text can be counted
+    independently). Consecutive active rows form a run; two runs are
+    separated once a gap of more than ``gap`` empty rows appears.
+
+    The 16-level e-ink pipeline dithers text into mixed tones, so
+    the caller passes a tone band wide enough to cover the dither
+    spread of the target text while staying clear of the other tone.
+
+    Args:
+        img: A grayscale ("L" mode) PIL image.
+        x1: Left edge of the region.
+        y1: Top edge of the region.
+        x2: Right edge of the region.
+        y2: Bottom edge of the region.
+        low: Lower bound (inclusive) of the tone band.
+        high: Upper bound (exclusive) of the tone band.
+        min_pixels: Minimum matching pixels per row for the row to
+            count as part of a text line.
+        gap: Maximum number of empty rows allowed inside a run
+            before the run is split.
+
+    Returns:
+        List of ``(top, bottom)`` y-runs in absolute image
+        coordinates, ordered top to bottom.
+    """
+    crop = img.crop((x1, y1, x2, y2))
+    mask = crop.point(lambda p: 255 if low <= p < high else 0)
+    rows = mask.load()
+    w_px, h_px = crop.size
+    active = [
+        y
+        for y in range(h_px)
+        if sum(1 for x in range(w_px) if rows[x, y] == 255) >= min_pixels
+    ]
+    runs: list[tuple[int, int]] = []
+    for y in active:
+        if runs and y - runs[-1][1] <= gap:
+            runs[-1] = (runs[-1][0], y)
+        else:
+            runs.append((y, y))
+    return [(y1 + a, y1 + b + 1) for a, b in runs]
+
+
+class TestRenderEntityTextWrap:
+    # Verify that value and name text wider than the text column
+    # wraps onto additional lines inside the widget instead of
+    # overflowing the right edge, that the wrapped block stays
+    # vertically centered, and that the font shrinks when wrapping
+    # alone cannot keep the block inside the widget height.
+    _DEFAULTS: ClassVar[dict[str, object]] = {
+        "width": 400,
+        "height": 300,
+        "states": MOCK_ENTITY_WRAP_STATES,
+    }
+
+    def _config(self, **overrides: object) -> dict[str, object]:
+        return make_config(self._DEFAULTS, **overrides)
+
+    @staticmethod
+    def _widget(entity: str, **extra: object) -> dict[str, object]:
+        base: dict[str, object] = {
+            "type": "entity",
+            "x": 0,
+            "y": 0,
+            "w": 400,
+            "h": 112,
+            "entity": entity,
+        }
+        base.update(extra)
+        return base
+
+    def test_short_value_single_line(self) -> None:
+        # A value that fits on one line must render exactly one
+        # dark text row — wrapping must not kick in early.
+        text_x0, text_x1 = _content_x_range(400, 112)
+        img = render_to_image(
+            [self._widget("sensor.wrap_short")], self._config()
+        )
+        runs = _line_runs(img, text_x0, 0, text_x1, 112, 0, 96)
+        assert len(runs) == 1, f"expected 1 value line, got {len(runs)}"
+
+    def test_long_value_wraps_to_two_lines(self) -> None:
+        # A value wider than the text column must wrap to two lines
+        # and no dark pixel may appear past the right content edge.
+        text_x0, text_x1 = _content_x_range(400, 112)
+        img = render_to_image(
+            [self._widget("sensor.wrap_value")], self._config()
+        )
+        runs = _line_runs(img, text_x0, 0, text_x1, 112, 0, 96)
+        assert len(runs) >= 2, (
+            f"value should wrap to >= 2 lines, got {len(runs)}"
+        )
+        assert_all_white(img, text_x1, 0, 400, 112)
+
+    def test_long_token_wraps_char_by_char(self) -> None:
+        # A single long token with no whitespace must still wrap
+        # (character-level breaking) instead of overflowing.
+        text_x0, text_x1 = _content_x_range(400, 112)
+        img = render_to_image(
+            [self._widget("sensor.wrap_token")], self._config()
+        )
+        runs = _line_runs(img, text_x0, 0, text_x1, 112, 0, 96)
+        assert len(runs) >= 2, (
+            f"token should wrap to >= 2 lines, got {len(runs)}"
+        )
+        assert_all_white(img, text_x1, 0, 400, 112)
+
+    def test_wrapped_block_stays_centered(self) -> None:
+        # The wrapped value+name block must remain vertically
+        # centered against the icon, which is centered on h/2.
+        m_icon = _compute_metrics(56)
+        text_x0, text_x1 = _content_x_range(400, 112)
+        img = render_to_image(
+            [self._widget("sensor.wrap_value")], self._config()
+        )
+        assert_vertically_centered(
+            img,
+            icon_region=(
+                m_icon.padding,
+                0,
+                m_icon.padding + m_icon.icon_dia,
+                112,
+            ),
+            text_region=(text_x0, 0, text_x1, 112),
+            tolerance=3.0,
+        )
+
+    def test_huge_value_shrinks_font(self) -> None:
+        # A value that still does not fit vertically after wrapping
+        # must trigger a font-size reduction so every line stays
+        # inside the widget. The largest font in the SVG (the value
+        # font) must drop below the unshrunk 24 px.
+        text_x0, text_x1 = _content_x_range(400, 112)
+        img = render_to_image(
+            [self._widget("sensor.wrap_huge")], self._config()
+        )
+        runs = _line_runs(img, text_x0, 0, text_x1, 112, 0, 96)
+        assert len(runs) >= 2, "value should still render on >= 2 lines"
+        assert_all_white(img, text_x1, 0, 400, 112)
+        svg = render_widget_svg(
+            self._widget("sensor.wrap_huge"), self._config()
+        )
+        fonts = [int(v) for v in re.findall(r'font-size="(\d+)"', svg)]
+        assert fonts, "no font-size attributes found in SVG"
+        assert max(fonts) < 24, (
+            f"value font should shrink below 24, largest is {max(fonts)}"
+        )
+
+    def test_wrapped_value_keeps_unit(self) -> None:
+        # Wrapping the value must not drop the unit: it still
+        # renders (inline on the last line or on its own line).
+        svg = render_widget_svg(
+            self._widget("sensor.wrap_value"), self._config()
+        )
+        assert "°C" in svg, "unit must still render for a wrapped value"
+
+    def test_long_name_wraps(self) -> None:
+        # A name wider than the text column must wrap to gray text
+        # lines that stay inside the right content edge.
+        text_x0, text_x1 = _content_x_range(400, 112)
+        img = render_to_image(
+            [self._widget("sensor.wrap_name")], self._config()
+        )
+        runs = _line_runs(img, text_x0, 0, text_x1, 112, 100, 160)
+        assert len(runs) >= 2, (
+            f"name should wrap to >= 2 lines, got {len(runs)}"
+        )
+        assert_no_gray_pixels(img, text_x1, 0, 400, 112)
+
+    def test_long_name_right_align_stays_in_column(self) -> None:
+        # A right-aligned long name must not overflow past the right
+        # content edge nor run left of the text column start.
+        text_x0, text_x1 = _content_x_range(400, 112)
+        img = render_to_image(
+            [self._widget("sensor.wrap_name", name_align="right")],
+            self._config(),
+        )
+        assert_no_gray_pixels(img, text_x1, 0, 400, 112)
+        name_bbox = _band_bbox(img, text_x0, 0, text_x1, 112, 100, 140)
+        assert name_bbox is not None
+        assert name_bbox[2] >= text_x1 - 6, (
+            "right-aligned name should still reach the right edge"
+        )
+
+    def test_wrapped_value_with_hidden_name(self) -> None:
+        # With the name hidden the value block has more vertical
+        # room: wrapping still happens and nothing overflows.
+        text_x0, text_x1 = _content_x_range(400, 112)
+        img = render_to_image(
+            [self._widget("sensor.wrap_huge", hide_name=True)],
+            self._config(),
+        )
+        runs = _line_runs(img, text_x0, 0, text_x1, 112, 0, 96)
+        assert len(runs) >= 2, "value should still render on >= 2 lines"
+        assert_all_white(img, text_x1, 0, 400, 112)

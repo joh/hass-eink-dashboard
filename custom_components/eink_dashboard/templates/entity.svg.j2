@@ -38,16 +38,22 @@
     icon_outline=icon_outline, icon_no_circle=icon_no_circle,
     letter=letter, letter_font_sz=letter_font_sz) -}}
 {%- endif -%}
-{#- Value + unit: black, positioned right of the icon. -#}
+{#- Value: black, positioned right of the icon. One <text> per
+    wrapped line; the context builder computes value_lines and the
+    matching baselines (value_ys) together. -#}
+{%- for i in range(value_lines | length) -%}
 <text
-  x="{{ value_x }}" y="{{ value_y }}"
+  x="{{ value_x }}" y="{{ value_ys[i] }}"
   font-family="Roboto"
 {%- if value_bold %}
   font-weight="bold"
 {%- endif %}
   font-size="{{ value_font_sz }}"
   dominant-baseline="auto"
-  fill="{{ hex_white if invert else hex_black }}">{{ value_text }}</text>
+  fill="{{ hex_white if invert else hex_black }}">{{ value_lines[i] }}</text>
+{%- endfor -%}
+{#- Unit: inline right of the last value line when it fits there,
+    otherwise on its own line below it. -#}
 {%- if unit_text -%}
 <text
   x="{{ unit_x }}" y="{{ unit_y }}"
@@ -57,16 +63,18 @@
   fill="{{ hex_white if invert else hex_black }}">{{ unit_text }}</text>
 {%- endif -%}
 {#- Name: gray, above or below the value+unit line, left- or
-    right-aligned per name_align. -#}
+    right-aligned per name_align. Wraps like the value. -#}
 {%- if not hide_name -%}
+{%- for i in range(name_lines | length) -%}
 <text
-  x="{{ name_x }}" y="{{ name_y }}"
+  x="{{ name_x }}" y="{{ name_ys[i] }}"
   font-family="Roboto"
   font-weight="500"
   font-size="{{ name_font_sz }}"
   text-anchor="{{ name_anchor }}"
   dominant-baseline="central"
-  fill="{{ hex_white if invert else hex_gray }}">{{ name_text }}</text>
+  fill="{{ hex_white if invert else hex_gray }}">{{ name_lines[i] }}</text>
+{%- endfor -%}
 {%- endif -%}
 {%- endcall -%}
 {%- endif -%}
